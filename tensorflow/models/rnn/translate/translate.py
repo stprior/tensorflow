@@ -216,6 +216,8 @@ def train():
           print("  eval: bucket %d perplexity %.2f" % (bucket_id, eval_ppx))
         sys.stdout.flush()
 
+def summarise_state(state_array):
+    np.sum(state_array)
 
 def decode():
   with tf.Session() as sess:
@@ -251,7 +253,7 @@ def decode():
       encoder_inputs, decoder_inputs, target_weights = model.get_batch(
           {bucket_id: [(token_ids, [])]}, bucket_id)
       # Get output logits for the sentence.
-      _, _, output_logits = model.step(sess, encoder_inputs, decoder_inputs,
+      _, _, output_logits, hidden_states = model.step_with_states(sess, encoder_inputs, decoder_inputs,
                                        target_weights, bucket_id, True)
       # This is a greedy decoder - outputs are just argmaxes of output_logits.
       outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
@@ -260,6 +262,7 @@ def decode():
         outputs = outputs[:outputs.index(data_utils.EOS_ID)]
       # Print out French sentence corresponding to outputs.
       print(" ".join([tf.compat.as_str(rev_fr_vocab[output]) for output in outputs]))
+      print(" ".join([summarise_state(state) for state in hidden_states]))
       print("> ", end="")
       sys.stdout.flush()
       sentence = sys.stdin.readline()

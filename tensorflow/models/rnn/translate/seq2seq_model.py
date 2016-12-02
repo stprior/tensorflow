@@ -27,6 +27,18 @@ import tensorflow as tf
 
 from tensorflow.models.rnn.translate import data_utils
 
+class MultiRNNCellWithState(RNNCell):
+    def __init__(self, cells, state_is_tuple=True):
+        self.multi_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(cells)
+    
+    @property
+    def hidden_state(self):
+      return self._hidden_state
+
+    def __call__(self, inputs, state, scope=None):
+      """Run this multi-layer cell on inputs, starting from state."""
+      self._hidden_state = state
+      self.multi_rnn_cell.__call__(inputs,state,scope)
 
 class Seq2SeqModel(object):
   """Sequence-to-sequence model with attention and for multiple buckets.
@@ -113,14 +125,16 @@ class Seq2SeqModel(object):
             dtype)
       softmax_loss_function = sampled_loss
 
+       
+
     # Create the internal multi-layer cell for our RNN.
     single_cell = tf.nn.rnn_cell.GRUCell(size)
     if use_lstm:
       single_cell = tf.nn.rnn_cell.BasicLSTMCell(size)
     cell = single_cell
     if num_layers > 1:
-      cell = tf.nn.rnn_cell.MultiRNNCell([single_cell] * num_layers)
-
+      cell = tf.nn.rnn_cell.MultiRNNCellWithState([single_cell] * num_layers)
+      self.hidden_layer = cell.hidden_layer
     # The seq2seq function: we use embedding for the input and attention.
     def seq2seq_f(encoder_inputs, decoder_inputs, do_decode):
       return tf.nn.seq2seq.embedding_attention_seq2seq(
@@ -188,7 +202,7 @@ class Seq2SeqModel(object):
     self.saver = tf.train.Saver(tf.all_variables())
 
   def step(self, session, encoder_inputs, decoder_inputs, target_weights,
-           bucket_id, forward_only):
+           bucket_id, forward_only, with_states=False):
     """Run a step of the model feeding the given inputs.
 
     Args:
@@ -198,7 +212,8 @@ class Seq2SeqModel(object):
       target_weights: list of numpy float vectors to feed as target weights.
       bucket_id: which bucket of the model to use.
       forward_only: whether to do the backward step or only forward.
-
+      with_states: if true return a sequence of hidden state variables with the result
+        
     Returns:
       A triple consisting of gradient norm (or None if we did not do backward),
       average perplexity, and the outputs.
@@ -237,15 +252,20 @@ class Seq2SeqModel(object):
                      self.gradient_norms[bucket_id],  # Gradient norm.
                      self.losses[bucket_id]]  # Loss for this batch.
     else:
-      output_feed = [self.losses[bucket_id]]  # Loss for this batch.
+      if with_states:
+        output_feed = [self.losses[bucket_id],self.hidden_layer[bucket_id]]  # extra tensor for fetches to return
+      else:
+        output_feed = [self.losses[bucket_id]]  # Loss for this batch.
       for l in xrange(decoder_size):  # Output logits.
         output_feed.append(self.outputs[bucket_id][l])
-
     outputs = session.run(output_feed, input_feed)
     if not forward_only:
       return outputs[1], outputs[2], None  # Gradient norm, loss, no outputs.
     else:
-      return None, outputs[0], outputs[1:]  # No gradient norm, loss, outputs.
+      if with_states:
+        return None, outputs[0],outputs[1],outputs[2:] # Loss for this batch.
+      else:
+        return None, outputs[0], outputs[1:]  # No gradient norm, loss, outputs.
 
   def get_batch(self, data, bucket_id):
     """Get a random batch of data from the specified bucket, prepare for step.
